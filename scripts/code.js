@@ -1287,6 +1287,3 @@ document.getElementById("runButton").addEventListener("click", (event) => {
 
 	output.value = strResult;
 });
-
-// SAT R1: 7min
-// SAT R2: Not started yet lol
