@@ -703,7 +703,7 @@ class Parser {
 			);
 		}
 
-		const dataType = this.currentTok;
+		const dataType = this.currentTok.value;
 		this.advance();
 
 		let value = null;
@@ -935,7 +935,7 @@ class Environment {
 		this.assignAddress = 16;
 	}
 
-	defineSymbol(symbol, varType, dataType, value) {
+	defineSymbol(symbol, varType, dataType, value = null) {
 		const res = new ProcessResult();
 
 		if (this.symbols.has(symbol.symbol)) {
@@ -1406,19 +1406,28 @@ class Compiler {
 			: null;
 		if (res.error) return res;
 
-		if (value[1] !== node.dataType) {
-			return res.fail(new CustomTypeError(
-				node.startPos, node.endPos,
-				`Cannot assign [${value[1]}] to [${node.dataType.value}].`
-			))
+		if (value[1] != node.dataType) {
+			return res.fail(
+				new CustomTypeError(
+					node.startPos,
+					node.endPos,
+					`Cannot assign [${value[1]}] to [${node.dataType.value}].`
+				)
+			);
 		}
+
+		res.register(env.defineSymbol(node.symbol, "var", node.dataType));
 
 		if (value) {
 			if (this.KNOWN_VALUES.includes(value[0]))
 				this.instructions = this.instructions.slice(0, startPos);
 			this.loadImmediate(address);
 			this.comment(node.symbol.symbol);
-			this.write(this.KNOWN_VALUES.includes(value[0]) ? `COMP ${value[0]} M` : "COMP D M")
+			this.write(
+				this.KNOWN_VALUES.includes(value[0])
+					? `COMP ${value[0]} M`
+					: "COMP D M"
+			);
 		}
 
 		return res.success([null, node.dataType]);
