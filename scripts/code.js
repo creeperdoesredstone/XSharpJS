@@ -935,7 +935,7 @@ class Environment {
 		this.assignAddress = 16;
 	}
 
-	defineSymbol(symbol, varType, dataType, value = null) {
+	defineSymbol(symbol, varType, dataType, value) {
 		const res = new ProcessResult();
 
 		if (this.symbols.has(symbol.symbol)) {
@@ -959,7 +959,7 @@ class Environment {
 		if (varType != "const") {
 			this.assignAddress++;
 		}
-		return res.success(null);
+		return res.success([null, dataType]);
 	}
 
 	getSymbol(symbol) {
@@ -1020,6 +1020,11 @@ class Compiler {
 		this.availableRegs.delete(freeRegister);
 
 		return res.success(`.r${freeRegister}`);
+	}
+
+	makeNewJump() {
+		this.jumps++;
+		return this.jumps - 1;
 	}
 
 	write(inst) {
@@ -1233,6 +1238,190 @@ class Compiler {
 		);
 
 		return res.success([null, left[1]]);
+	}
+
+	visitUnaryOperation(node, env) {
+		const res = new ProcessResult();
+
+		const operationMap = new Map([
+			[TT.ADD, "+"],
+			[TT.SUB, "-"],
+			[TT.NOT, "~"],
+			[TT.INC, "++"],
+			[TT.DEC, "--"],
+			[TT.ABS, "#"],
+			[TT.SIGN, "$"],
+		]);
+		const operation = operationMap.get(node.opToken.tokenType);
+
+		if (node.opToken.tokenType === TT.AT) {
+			const address = res.register(env.getSymbol(node.value))[0];
+			if (res.error) return res;
+
+			if (env.constants.includes(node.value.symbol)) {
+				return res.fail(
+					new CustomTypeError(
+						node.value.startPos,
+						node.value.endPos,
+						"Cannot retrieve the address of a constant."
+					)
+				);
+			}
+			return this.visitNumericLiteral(
+				new NumericLiteral(
+					null,
+					null,
+					new Token(null, null, TT.NUM, address)
+				),
+				env
+			);
+		}
+
+		const valuePos = this.instructions.length;
+		const value = res.register(this.visit(node.value, env));
+		if (res.error) return res;
+
+		if (value[1] !== "int" && operation != "~") {
+			return res.fail(
+				new CustomTypeError(
+					node.value.startPos,
+					node.value.endPos,
+					`Incompatible operation ('${operation}') for [${value[1]}].`
+				)
+			);
+		}
+
+		if (Number.isInteger(value[0])) {
+			this.instructions = this.instructions.slice(0, valuePos);
+			let foldedValue;
+
+			switch (node.opToken.tokenType) {
+				case TT.ADD:
+					foldedValue = value[0];
+					break;
+				case TT.SUB:
+					foldedValue = -value[0];
+					break;
+				case TT.NOT:
+					foldedValue = ~value[0];
+					break;
+				case TT.INC:
+					foldedValue = value[0] + 1;
+					break;
+				case TT.DEC:
+					foldedValue = value[0] - 1;
+					break;
+				case TT.ABS:
+					foldedValue = Math.abs(value[0]);
+					break;
+				case TT.SIGN:
+					foldedValue = value[0] < 0 ? -1 : value[0] == 0 ? 0 : 1;
+					break;
+				default:
+					break;
+			}
+
+			const foldedNum = res.register(
+				this.visitNumericLiteral(
+					new NumericLiteral(
+						null,
+						null,
+						new Token(null, null, TT.NUM, foldedValue)
+					),
+					env
+				)
+			)[0];
+			return res.success([foldedNum, value[1]]);
+		} else {
+			switch (node.opToken.tokenType) {
+				case TT.SUB:
+					this.write("COMP -D D");
+					break;
+				case TT.NOT:
+					this.write("COMP !D D");
+					break;
+				case TT.INC:
+					this.write("COMP D++ D");
+					break;
+				case TT.DEC:
+					this.write("COMP D-- D");
+					break;
+				case TT.ABS:
+					const absJmp = this.makeNewJump();
+					this.loadImmediate(`.abs${absJmp}`);
+					this.write("COMP D JGE");
+					this.write("COMP -D D");
+					self.write(`.abs${absJmp}`);
+					break;
+				case TT.SIGN:
+					const signJmp = this.makeNewJump();
+					this.loadImmediate(`.neg${signJmp}`);
+					this.write("COMP D JLT");
+					this.loadImmediate(`.pos${signJmp}`);
+					this.write("COMP D JGT");
+					this.loadImmediate(`.end${signJmp}`);
+					this.write("COMP D JMP");
+
+					this.write(`.neg${signJmp}`);
+					this.write("COMP -1 D");
+					this.loadImmediate(`.end${signJmp}`);
+					this.write("COMP D JMP");
+					this.write(`.pos${signJmp}`);
+					this.write("COMP 1 D");
+					this.write(`.end${signJmp}`);
+					break;
+			}
+			return res.success([null, value[1]]);
+		}
+	}
+
+	visitConstDefinition(node, env) {
+		const res = new ProcessResult();
+		const startPos = this.instructions.length;
+
+		const value = res.register(this.visit(node.value, env));
+		if (res.error) return res;
+
+		if (value[0] === null) {
+			return res.fail(
+				new CodingError(
+					node.value.startPos,
+					node.value.endPos,
+					"Cannot use a variable in const definition."
+				)
+			);
+		}
+
+		this.instructions = this.instructions.slice(0, startPos);
+		return env.defineSymbol(node.symbol, "const", value[1], value[0]);
+	}
+
+	visitVarDeclaration(node, env) {
+		const res = new ProcessResult();
+		const startPos = this.instructions.length;
+		let address = env.assignAddress;
+
+		const value = node.value
+			? res.register(this.visit(node.value, env))
+			: null;
+		if (res.error) return res;
+
+		if (value[1] !== node.dataType) {
+			return res.fail(new CustomTypeError(
+				node.startPos, node.endPos,
+				`Cannot assign [${value[1]}] to [${node.dataType.value}].`
+			))
+		}
+
+		if (value) {
+			if (this.KNOWN_VALUES.includes(value[0]))
+				this.instructions = this.instructions.slice(0, startPos);
+			this.loadImmediate(address);
+			this.comment(node.symbol.symbol);
+			this.write(this.KNOWN_VALUES.includes(value[0]) ? `COMP ${value[0]} M` : "COMP D M")
+		}
+
+		return res.success([null, node.dataType]);
 	}
 }
 
