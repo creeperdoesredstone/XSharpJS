@@ -1019,7 +1019,13 @@ class Compiler {
 		this.allocatedRegs.add(freeRegister);
 		this.availableRegs.delete(freeRegister);
 
-		return res.success(`.r${freeRegister}`);
+		return res.success(`r${freeRegister}`);
+	}
+
+	free(register) {
+		const registerValue = parseInt(register.slice(1));
+		this.allocatedRegs.delete(registerValue);
+		this.availableRegs.add(registerValue);
 	}
 
 	makeNewJump() {
@@ -1145,6 +1151,8 @@ class Compiler {
 			[TT.AND, "&"],
 			[TT.OR, "|"],
 			[TT.XOR, "^"],
+			[TT.MUL, "*"],
+			[TT.RSHIFT, ">>"],
 		]);
 		const operation = operationMap.get(node.opToken.tokenType);
 
@@ -1232,11 +1240,96 @@ class Compiler {
 			}
 		}
 
-		this.loadImmediate(leftRegister);
-		this.write(
-			`COMP ${operation == "-" ? "M-D" : "D" + operation + "M"} D`
-		);
+		if (operation === "*") {
+			this.loadImmediate(rightRegister);
+			this.write("COMP D M");
+			const productRegister = res.register(this.allocate(node));
+			if (res.error) return res;
 
+			this.loadImmediate(productRegister);
+			this.write("COMP 0 M");
+
+			this.visitIdentifier(
+				new Identifier(
+					null,
+					null,
+					new Token(null, null, TT.IDENTIFIER, "N_BITS")
+				),
+				env
+			);
+			const bits = res.register(this.allocate(node));
+			if (res.error) return res;
+			this.loadImmediate(bits);
+			this.write("COMP D M");
+
+			const mulJmp = this.makeNewJump();
+			this.write(`.mulLoop${mulJmp}`);
+			this.tabs++;
+			this.write("COMP 1 D");
+			this.loadImmediate(rightRegister);
+			this.comment("Get LSB");
+			this.write("COMP D&M D");
+			this.loadImmediate(`.mulShift${mulJmp}`);
+			this.write("COMP D JEQ");
+
+			// Add multiplier to product
+			this.loadImmediate(leftRegister);
+			this.write("COMP M D");
+			this.loadImmediate(productRegister);
+			this.write("COMP D+M M");
+
+			this.write(`.mulShift${mulJmp}`);
+			this.loadImmediate(rightRegister);
+			this.write("COMP >>M M");
+			this.loadImmediate(leftRegister);
+			this.write("COMP M D");
+			this.write("COMP D+M M");
+
+			this.loadImmediate(bits);
+			this.write("COMP M-- DM");
+			this.loadImmediate(`.mulLoop${mulJmp}`);
+			this.write("COMP D JGE");
+
+			this.tabs--;
+			this.loadImmediate(productRegister);
+			this.write("COMP M D");
+			this.free(productRegister);
+			this.free(bits);
+		} else if (operation === ">>") {
+			if ([0, 1].includes(right[0])) {
+				this.instructions = this.instructions.slice(0, rightPos - 2);
+				if (right[0] == 1) this.write("COMP >>D D");
+			} else {
+				this.loadImmediate(rightRegister);
+				this.write("COMP D M");
+
+				const rshiftJmp = this.makeNewJump();
+				this.write(`.rshiftLoop${rshiftJmp}`);
+				this.tabs++;
+				this.loadImmediate(rightRegister);
+				this.write("COMP M-- DM");
+				this.loadImmediate(`.rshiftEnd${rshiftJmp}`);
+				this.write("COMP D JLT");
+
+				this.loadImmediate(leftRegister);
+				this.write("COMP >>M M");
+				this.loadImmediate(`.rshiftLoop${rshiftJmp}`);
+				this.write("COMP 0 JMP");
+
+				this.tabs--;
+				this.write(`.rshiftEnd${rshiftJmp}`);
+				this.loadImmediate(leftRegister);
+				this.write("COMP M D");
+			}
+		} else {
+			this.loadImmediate(leftRegister);
+			this.write(
+				`COMP ${operation == "-" ? "M-D" : "D" + operation + "M"} D`
+			);
+		}
+
+		this.free(leftRegister);
+		this.free(rightRegister);
 		return res.success([null, left[1]]);
 	}
 
