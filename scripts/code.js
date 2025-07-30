@@ -577,6 +577,30 @@ class CastExpression {
 	}
 }
 
+class ForLoop {
+	constructor(
+		startPos,
+		endPos,
+		identifier,
+		startValue,
+		endValue,
+		stepValue,
+		body,
+		endToken,
+		stepToken
+	) {
+		this.startPos = startPos;
+		this.endPos = endPos;
+		this.identifier = identifier;
+		this.startValue = startValue;
+		this.endValue = endValue;
+		this.stepValue = stepValue;
+		this.body = body;
+		this.endToken = endToken;
+		this.stepToken = stepToken;
+	}
+}
+
 class Parser {
 	constructor(tokens) {
 		this.tokens = tokens;
@@ -683,6 +707,8 @@ class Parser {
 					return this.varDeclaration();
 				case "const":
 					return this.constDefinition();
+				case "for":
+					return this.forLoop();
 			}
 		}
 		return this.expr();
@@ -783,6 +809,133 @@ class Parser {
 
 		return res.success(
 			new ConstDefinition(startPos, value.endPos, symbol, value)
+		);
+	}
+
+	forLoop() {
+		const res = new CompileResult();
+		const startPos = this.currentTok.startPos;
+		this.advance();
+
+		if (this.currentTok.tokenType !== TT.LPR)
+			return res.fail(
+				this.failCurrentTok("Expected '(' after 'for' keyword.")
+			);
+		this.advance();
+
+		if (this.currentTok.tokenType !== TT.IDENTIFIER)
+			return res.fail(
+				this.failCurrentTok("Expected an identifier after '('.")
+			);
+		const identifier = res.register(this.literal());
+		if (res.error) return res;
+		if (this.currentTok.tokenType !== TT.ASSIGN)
+			return res.fail(
+				this.failCurrentTok("Expected '=' after iterator.")
+			);
+		this.advance();
+		const startValue = res.register(this.expr());
+		if (res.error) return res;
+
+		if (this.currentTok.notEquals(new Token(null, null, TT.NEWLINE, ";"))) {
+			return res.fail(
+				this.failCurrentTok("Expected ';' after start value.")
+			);
+		}
+		this.advance();
+		if (
+			this.currentTok.notEquals(
+				new Token(null, null, TT.IDENTIFIER, identifier.symbol)
+			)
+		) {
+			return res.fail(
+				this.failCurrentTok(
+					`Expected '${identifier.symbol}' after ';'.`
+				)
+			);
+		}
+		this.advance();
+		if (![TT.LT, TT.LE, TT.GT, TT.GE].includes(this.currentTok.tokenType)) {
+			return res.fail(
+				this.failCurrentTok("Expected '<', '<=', '>', or '>='.")
+			);
+		}
+		const endToken = this.currentTok;
+		this.advance();
+
+		const endValue = res.register(this.expr());
+		if (res.error) return res;
+
+		if (this.currentTok.notEquals(new Token(null, null, TT.NEWLINE, ";"))) {
+			return res.fail(
+				this.failCurrentTok("Expected ';' after start value.")
+			);
+		}
+		this.advance();
+		if (
+			this.currentTok.notEquals(
+				new Token(null, null, TT.IDENTIFIER, identifier.symbol)
+			)
+		) {
+			return res.fail(
+				this.failCurrentTok(
+					`Expected '${identifier.symbol}' after ';'.`
+				)
+			);
+		}
+		this.advance();
+		if (![TT.ADDTO, TT.SUBBY].includes(this.currentTok.tokenType)) {
+			return res.fail(
+				this.failCurrentTok(
+					`Expected '+=' or '-=' after '${identifier.symbol}'.`
+				)
+			);
+		}
+		const stepToken = this.currentTok;
+		this.advance();
+		const stepValue = res.register(this.expr());
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType !== TT.RPR) {
+			console.log(this.currentTok);
+			return res.fail(
+				this.failCurrentTok("Expected ')' after step value.")
+			);
+		}
+		this.advance();
+		if (this.currentTok.tokenType !== TT.LBR) {
+			return res.fail(this.failCurrentTok("Expected '{' after ')'."));
+		}
+		this.advance();
+
+		const body = res.register(this.statements([TT.EOF, TT.RBR]));
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType !== TT.RBR) {
+			return res.fail(
+				this.failCurrentTok("Expected '}' after code block.")
+			);
+		}
+		const endPos = this.currentTok.endPos;
+		this.advance();
+		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+			return res.fail(
+				this.failCurrentTok("Expected a newline or EOF after '}'.")
+			);
+		}
+
+		return res.success(
+			new ForLoop(
+				startPos,
+				endPos,
+				identifier,
+				startValue,
+				endValue,
+				stepValue,
+				body,
+				endToken,
+				stepToken
+			)
 		);
 	}
 
@@ -1138,7 +1291,133 @@ class Compiler {
 		if (res.error) return res;
 		this.write("HALT");
 
-		return res.success(this.instructions.join("\n"));
+		const optimized = this.optimizeInstructions(this.instructions);
+		return res.success(optimized.join("\n"));
+	}
+
+	optimizeNode(node) {
+		const isAddSub = (type) => type === TT.ADD || type === TT.SUB;
+
+		if (node instanceof BinaryOperation) {
+			if (
+				node.opToken.tokenType === TT.ASSIGN &&
+				node.right instanceof BinaryOperation &&
+				isAddSub(node.right.opToken.tokenType) &&
+				node.left instanceof Identifier &&
+				node.right.left instanceof Identifier &&
+				node.left.symbol === node.right.left.symbol
+			) {
+				return new BinaryOperation(
+					node.startPos,
+					node.endPos,
+					node.left,
+					new Token(
+						node.opToken.startPos,
+						node.opToken.endPos,
+						node.right.opToken.tokenType === TT.ADD
+							? TT.ADDTO
+							: TT.SUBBY
+					),
+					node.right.right
+				);
+			}
+			if (
+				isAddSub(node.opToken.tokenType) &&
+				node.right instanceof NumericLiteral
+			) {
+				if (node.right.value == 0) return node.left;
+				else if (node.right.value == 1)
+					return new UnaryOperation(
+						node.left.startPos,
+						node.right.endPos,
+						new Token(
+							node.opToken.startPos,
+							node.opToken.endPos,
+							node.opToken.tokenType === TT.ADD ? TT.INC : TT.DEC
+						),
+						node.left
+					);
+			}
+			if (
+				node.opToken.tokenType === TT.ADD &&
+				node.left instanceof NumericLiteral
+			) {
+				if (node.left.value == 0) return node.left;
+				else if (node.left.value == 1)
+					return new UnaryOperation(
+						node.left.startPos,
+						node.right.endPos,
+						new Token(
+							node.opToken.startPos,
+							node.opToken.endPos,
+							TT.INC
+						),
+						node.right
+					);
+			}
+			if (
+				node.opToken.tokenType === TT.SUB &&
+				node.left instanceof NumericLiteral &&
+				node.left.value == 0
+			) {
+				return new UnaryOperation(
+					node.left.startPos,
+					node.right.endPos,
+					new Token(
+						node.opToken.startPos,
+						node.opToken.endPos,
+						TT.SUB
+					),
+					node.right
+				);
+			}
+		}
+		return node;
+	}
+
+	optimizeInstructions(instructions) {
+		const optimized = [];
+		let prev = null;
+		let lastLoaded = null;
+		let afterJump = false;
+		const removedLabels = new Map();
+
+		for (let i = 0; i < instructions.length; i++) {
+			let line = instructions[i].trim();
+
+			if (!line || line.startsWith("//")) continue;
+
+			if (line === prev) continue;
+
+			if (line.startsWith("LDIA")) {
+				let value = line.split(" ")[1];
+
+				if (removedLabels.has(value)) {
+					value = removedLabels.get(value);
+				}
+
+				if (value === lastLoaded) {
+					if (prev && !prev.startsWith(".")) continue;
+				}
+				lastLoaded = value;
+			} else if (line.startsWith("COMP")) {
+				if (line === "COMP M D" && prev && prev === "COMP D M")
+					continue;
+			} else lastLoaded = null;
+
+			if (afterJump && !line.startsWith(".")) continue;
+			afterJump = prev && prev.endsWith("JMP");
+
+			if (line.startsWith(".") && prev && prev.startsWith(".")) {
+				removedLabels.set(prev, line);
+				continue;
+			}
+
+			optimized.push(line);
+			prev = line;
+		}
+
+		return optimized;
 	}
 
 	handleComparison(operation, leftRegister) {
@@ -1158,6 +1437,23 @@ class Compiler {
 		return res.success([null, "bool"]);
 	}
 
+	validateVariable(identifier, env) {
+		const res = new CompileResult();
+		if (
+			identifier instanceof Identifier &&
+			!env.definedVars.includes(identifier.symbol)
+		) {
+			return res.fail(
+				new SymbolError(
+					identifier.startPos,
+					identifier.endPos,
+					`Symbol '${identifier.symbol}' isn't assigned a value yet.`
+				)
+			);
+		}
+		return res.success(null);
+	}
+
 	noVisitMethod(node, env) {
 		return new CompileResult().fail(
 			new CodingError(
@@ -1169,12 +1465,13 @@ class Compiler {
 	}
 
 	visit(node, env) {
-		const visitMethodName = `visit${node.constructor.name}`;
+		const optimizedNode = this.optimizeNode(node);
+		const visitMethodName = `visit${optimizedNode.constructor.name}`;
 		const visitMethod = this.methodNames.includes(visitMethodName)
 			? this[visitMethodName]
 			: this.noVisitMethod;
 
-		return visitMethod.call(this, node, env);
+		return visitMethod.call(this, optimizedNode, env);
 	}
 
 	visitStatements(node, env) {
@@ -1310,6 +1607,9 @@ class Compiler {
 			);
 		}
 
+		res.register(this.validateVariable(node.right, env));
+		if (res.error) return res;
+
 		if (["=", "+=", "-="].includes(operation)) {
 			const varData = res.register(env.getSymbol(node.left));
 			if (res.error) return res;
@@ -1345,33 +1645,22 @@ class Compiler {
 					this.write("COMP D M");
 					break;
 				case "+=":
-					if (!env.definedVars.includes(node.left.symbol)) {
-						return res.fail(
-							new SymbolError(
-								node.right.startPos,
-								node.right.endPos,
-								`Symbol '${node.left.symbol}' hasn't been assigned to a value yet.`
-							)
-						);
-					}
+					res.register(this.validateVariable(node.left, env));
+					if (res.error) return res;
 					this.write("COMP D+M DM");
 					break;
 				case "-=":
-					if (!env.definedVars.includes(node.left.symbol)) {
-						return res.fail(
-							new SymbolError(
-								node.right.startPos,
-								node.right.endPos,
-								`Symbol '${node.left.symbol}' hasn't been assigned to a value yet.`
-							)
-						);
-					}
+					res.register(this.validateVariable(node.left, env));
+					if (res.error) return res;
 					this.write("COMP M-D DM");
 					break;
 			}
 
 			return res.success([value[0], varData[1]]);
 		}
+
+		res.register(this.validateVariable(node.left, env));
+		if (res.error) return res;
 
 		const leftPos = this.instructions.length;
 		const left = res.register(this.visit(node.left, env));
@@ -1612,6 +1901,9 @@ class Compiler {
 			);
 		}
 
+		res.register(this.validateVariable(node.value, env));
+		if (res.error) return res;
+
 		const valuePos = this.instructions.length;
 		const value = res.register(this.visit(node.value, env));
 		if (res.error) return res;
@@ -1651,8 +1943,6 @@ class Compiler {
 					break;
 				case TT.SIGN:
 					foldedValue = value[0] < 0 ? -1 : value[0] == 0 ? 0 : 1;
-					break;
-				default:
 					break;
 			}
 
