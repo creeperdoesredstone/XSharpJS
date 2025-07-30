@@ -1752,8 +1752,9 @@ class Compiler {
 		}
 
 		res.register(env.defineSymbol(node.symbol, "var", node.dataType));
+		if (res.error) return res;
 
-		if (value[0]) {
+		if (value[0] != null) {
 			env.definedVars.push(node.symbol.symbol);
 			if (this.KNOWN_VALUES.includes(value[0]))
 				this.instructions = this.instructions.slice(0, startPos);
