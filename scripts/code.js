@@ -181,7 +181,7 @@ class Token {
 	}
 }
 
-class ProcessResult {
+class CompileResult {
 	constructor() {
 		this.value = null;
 		this.error = null;
@@ -224,7 +224,7 @@ class Lexer {
 
 	processIncludes() {
 		const textLines = this.ftxt.split(/[\;\n]/);
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		let libraries = [];
 
@@ -268,7 +268,7 @@ class Lexer {
 
 	lex() {
 		let tokens = [];
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		res.register(this.processIncludes());
 		if (res.error) return res;
@@ -580,7 +580,7 @@ class Parser {
 	}
 
 	binaryOp(funcLeft, funcRight, types) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		let opToken;
 		let right;
 
@@ -619,14 +619,14 @@ class Parser {
 	}
 
 	parse() {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		const ast = res.register(this.statements());
 		return res.success(ast);
 	}
 
 	statements(end = [TT.EOF]) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const body = [];
 		const endTokenTypes = end;
 		endTokenTypes.push(TT.NEWLINE);
@@ -676,7 +676,7 @@ class Parser {
 	}
 
 	varDeclaration() {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const startPos = this.currentTok.startPos;
 		this.advance();
 
@@ -741,7 +741,7 @@ class Parser {
 	}
 
 	constDefinition() {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const startPos = this.currentTok.startPos;
 		this.advance();
 
@@ -778,7 +778,7 @@ class Parser {
 	}
 
 	assignment() {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const left = res.register(this.comparison());
 		if (res.error) return res;
 
@@ -815,7 +815,14 @@ class Parser {
 	}
 
 	comparison() {
-		return this.bitwise();
+		return this.binaryOp(this.bitwise, this.bitwise, [
+			TT.LT,
+			TT.LE,
+			TT.GT,
+			TT.GE,
+			TT.EQ,
+			TT.NE,
+		]);
 	}
 
 	bitwise() {
@@ -840,7 +847,7 @@ class Parser {
 	}
 
 	unary() {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		let opToken;
 
 		if (
@@ -904,7 +911,7 @@ class Parser {
 
 	literal() {
 		const tok = this.currentTok;
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		this.advance();
 
 		switch (tok.tokenType) {
@@ -957,7 +964,7 @@ class Environment {
 	}
 
 	defineSymbol(symbol, varType, dataType, value = null) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		if (this.symbols.has(symbol.symbol)) {
 			return res.fail(
@@ -984,7 +991,7 @@ class Environment {
 	}
 
 	getSymbol(symbol) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const symbolStr = symbol.symbol;
 
 		if (!this.symbols.has(symbolStr)) {
@@ -1025,7 +1032,7 @@ class Compiler {
 	}
 
 	allocate(node) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		if (!this.availableRegs) {
 			return res.fail(
 				new CodingError(
@@ -1075,7 +1082,7 @@ class Compiler {
 	}
 
 	compile(ast) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const env = new Environment();
 
 		this.jumps = 0;
@@ -1090,8 +1097,25 @@ class Compiler {
 		return res.success(this.instructions.join("\n"));
 	}
 
+	handleComparison(operation, leftRegister) {
+		const res = new CompileResult();
+		this.loadImmediate(leftRegister);
+		this.write("COMP M-D D");
+
+		const boolJmp = this.makeNewJump();
+		this.loadImmediate(`.true${boolJmp}`);
+		this.write(`COMP D J${operation}`);
+		this.write("COMP 0 D");
+		this.loadImmediate(`.end${boolJmp}`);
+		this.write(`.true${boolJmp}`);
+		this.write("COMP -1 D");
+		this.write(`.end${boolJmp}`);
+
+		return res.success([null, "bool"]);
+	}
+
 	noVisitMethod(node, env) {
-		return new ProcessResult().fail(
+		return new CompileResult().fail(
 			new CodingError(
 				node.startPos,
 				node.endPos,
@@ -1110,7 +1134,7 @@ class Compiler {
 	}
 
 	visitStatements(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		for (const stmt of node.body) {
 			res.register(this.visit(stmt, env));
 			if (res.error) return res;
@@ -1120,7 +1144,7 @@ class Compiler {
 	}
 
 	visitNumericLiteral(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		if (this.KNOWN_VALUES.includes(node.value))
 			this.write(`COMP ${node.value} D`);
 		else {
@@ -1132,7 +1156,7 @@ class Compiler {
 	}
 
 	visitIdentifier(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const valueAndType = res.register(env.getSymbol(node));
 		if (res.error) return res;
 
@@ -1164,7 +1188,7 @@ class Compiler {
 	}
 
 	visitBinaryOperation(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		const operationMap = new Map([
 			[TT.ADD, "+"],
@@ -1174,9 +1198,16 @@ class Compiler {
 			[TT.XOR, "^"],
 			[TT.MUL, "*"],
 			[TT.RSHIFT, ">>"],
+			[TT.LSHIFT, "<<"],
 			[TT.ASSIGN, "="],
 			[TT.ADDTO, "+="],
 			[TT.SUBBY, "-="],
+			[TT.LT, "<"],
+			[TT.LE, "<="],
+			[TT.GT, ">"],
+			[TT.GE, ">="],
+			[TT.EQ, "=="],
+			[TT.NE, "!="],
 		]);
 		const operation = operationMap.get(node.opToken.tokenType);
 
@@ -1408,6 +1439,41 @@ class Compiler {
 				this.loadImmediate(leftRegister);
 				this.write("COMP M D");
 			}
+		} else if (operation === "<<") {
+			if ([0, 1].includes(right[0])) {
+				this.instructions = this.instructions.slice(0, rightPos - 2);
+				if (right[0] == 1) this.write("COMP D+M D");
+			} else {
+				this.loadImmediate(rightRegister);
+				this.write("COMP D M");
+
+				const lshiftJmp = this.makeNewJump();
+				this.write(`.lshiftLoop${lshiftJmp}`);
+				this.tabs++;
+				this.loadImmediate(rightRegister);
+				this.write("COMP M-- DM");
+				this.loadImmediate(`.lshiftEnd${lshiftJmp}`);
+				this.write("COMP D JLT");
+
+				this.loadImmediate(leftRegister);
+				this.write("COMP M D");
+				this.write("COMP D+M M");
+				this.loadImmediate(`.lshiftLoop${lshiftJmp}`);
+				this.write("COMP 0 JMP");
+
+				this.tabs--;
+				this.write(`.lshiftEnd${lshiftJmp}`);
+				this.loadImmediate(leftRegister);
+				this.write("COMP M D");
+			}
+		} else if (["<", "<=", ">", ">=", "==", "!="].includes(operation)) {
+			const compResult = this.handleComparison(
+				`${node.opToken}`,
+				leftRegister
+			);
+			this.free(leftRegister);
+			this.free(rightRegister);
+			return compResult;
 		} else {
 			this.loadImmediate(leftRegister);
 			this.write(
@@ -1421,7 +1487,7 @@ class Compiler {
 	}
 
 	visitUnaryOperation(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 
 		const operationMap = new Map([
 			[TT.ADD, "+"],
@@ -1556,7 +1622,7 @@ class Compiler {
 	}
 
 	visitConstDefinition(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const startPos = this.instructions.length;
 
 		const value = res.register(this.visit(node.value, env));
@@ -1577,7 +1643,7 @@ class Compiler {
 	}
 
 	visitVarDeclaration(node, env) {
-		const res = new ProcessResult();
+		const res = new CompileResult();
 		const startPos = this.instructions.length;
 		let address = env.assignAddress;
 
