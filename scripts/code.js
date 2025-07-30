@@ -564,6 +564,19 @@ class ConstDefinition {
 	}
 }
 
+class CastExpression {
+	constructor(startPos, endPos, dataType, value) {
+		this.startPos = startPos;
+		this.endPos = endPos;
+		this.dataType = dataType;
+		this.value = value;
+	}
+
+	toString() {
+		return `CAST ${this.value} to ${this.dataType}`;
+	}
+}
+
 class Parser {
 	constructor(tokens) {
 		this.tokens = tokens;
@@ -924,6 +937,13 @@ class Parser {
 					new Identifier(tok.startPos, tok.endPos, tok)
 				);
 			case TT.LPR:
+				if (
+					this.currentTok.tokenType == TT.KEYWORD &&
+					DATA_TYPES.includes(this.currentTok.value)
+				) {
+					return this.castExpression(tok.startPos);
+				}
+
 				const expression = res.register(this.expr());
 				if (res.error) return res;
 
@@ -948,6 +968,30 @@ class Parser {
 					)
 				);
 		}
+	}
+
+	castExpression(startPos) {
+		const res = new CompileResult();
+		const dataType = this.currentTok.value;
+		this.advance();
+
+		if (this.currentTok.tokenType != TT.RPR) {
+			return res.fail(
+				new InvalidSyntax(
+					this.currentTok.startPos,
+					this.currentTok.endPos,
+					`Expected ')' after '${dataType}'.`
+				)
+			);
+		}
+		this.advance();
+
+		const value = res.register(this.expr());
+		if (res.error) return res;
+
+		return res.success(
+			new CastExpression(startPos, value.endPos, dataType, value)
+		);
 	}
 }
 
@@ -1105,8 +1149,8 @@ class Compiler {
 		const boolJmp = this.makeNewJump();
 		this.loadImmediate(`.true${boolJmp}`);
 		this.write(`COMP D J${operation}`);
-		this.write("COMP 0 D");
 		this.loadImmediate(`.end${boolJmp}`);
+		this.write("COMP 0 D JMP");
 		this.write(`.true${boolJmp}`);
 		this.write("COMP -1 D");
 		this.write(`.end${boolJmp}`);
@@ -1185,6 +1229,51 @@ class Compiler {
 			env.constants.includes(node.symbol) ? value : null,
 			type,
 		]);
+	}
+
+	visitCastExpression(node, env) {
+		const res = new CompileResult();
+		const value = res.register(this.visit(node.value, env));
+		if (res.error) return res;
+
+		if (value[1] === node.dataType) return res.success(value);
+
+		if (value[1] === "bool") {
+			if (node.dataType === "int")
+				return res.success([value[0], node.dataType]);
+		} else if (value[1] === "int") {
+			if (Number.isInteger(value[0])) {
+				return res.success([
+					this.visitNumericLiteral(
+						new NumericLiteral(
+							null,
+							null,
+							new Token(null, null, TT.NUM, value[0] > 0 ? -1 : 0)
+						),
+						env
+					).value[0],
+					"bool",
+				]);
+			} else {
+				const boolJmp = this.makeNewJump();
+				this.loadImmediate(`.true${boolJmp}`);
+				this.write(`COMP D JGT`);
+				this.loadImmediate(`.end${boolJmp}`);
+				this.write("COMP 0 D JMP");
+				this.write(`.true${boolJmp}`);
+				this.write("COMP -1 D");
+				this.write(`.end${boolJmp}`);
+				return res.success([null, "bool"]);
+			}
+		}
+
+		return res.fail(
+			new CodingError(
+				node.value.startPos,
+				node.value.endPos,
+				`Cannot cast [${value[1]}] to [${node.dataType}].`
+			)
+		);
 	}
 
 	visitBinaryOperation(node, env) {
