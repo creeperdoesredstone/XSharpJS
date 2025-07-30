@@ -53,7 +53,9 @@ const TT = {
 	IDENTIFIER: 31,
 	KEYWORD: 32,
 	NEWLINE: 33,
-	EOF: 34,
+	ADDTO: 34,
+	SUBBY: 35,
+	EOF: 36,
 
 	str: (val) => {
 		return TT_STR[val] ?? "UNKNOWN";
@@ -344,6 +346,9 @@ class Lexer {
 				if (this.currentChar == "+") {
 					this.advance();
 					tokens.push(new Token(startPos, this.pos.copy(), TT.INC));
+				} else if (this.currentChar == "=") {
+					this.advance();
+					tokens.push(new Token(startPos, this.pos.copy(), TT.ADDTO));
 				} else {
 					tokens.push(new Token(startPos, this.pos.copy(), TT.ADD));
 				}
@@ -352,6 +357,9 @@ class Lexer {
 				if (this.currentChar == "-") {
 					this.advance();
 					tokens.push(new Token(startPos, this.pos.copy(), TT.DEC));
+				} else if (this.currentChar == "=") {
+					this.advance();
+					tokens.push(new Token(startPos, this.pos.copy(), TT.SUBBY));
 				} else {
 					tokens.push(new Token(startPos, this.pos.copy(), TT.SUB));
 				}
@@ -774,7 +782,19 @@ class Parser {
 		const left = res.register(this.comparison());
 		if (res.error) return res;
 
-		if (this.currentTok.tokenType == TT.ASSIGN) {
+		if (
+			[TT.ASSIGN, TT.ADDTO, TT.SUBBY].includes(this.currentTok.tokenType)
+		) {
+			if (!(left instanceof Identifier)) {
+				return res.fail(
+					new InvalidSyntax(
+						left.startPos,
+						left.endPos,
+						"A value can only be assigned to an idenitifer."
+					)
+				);
+			}
+
 			const opToken = this.currentTok;
 			this.advance();
 			const right = res.register(this.assignment());
@@ -917,7 +937,7 @@ class Parser {
 					new InvalidSyntax(
 						tok.startPos,
 						tok.endPos,
-						"Expected a number or an identifier."
+						`Expected a number or an identifier, found token ${tok} instead.`
 					)
 				);
 		}
@@ -931,6 +951,7 @@ class Environment {
 			["false", [0, "bool"]],
 			["N_BITS", [16, "int"]],
 		]);
+		this.definedVars = [];
 		this.constants = ["true", "false", "N_BITS"];
 		this.assignAddress = 16;
 	}
@@ -1153,6 +1174,9 @@ class Compiler {
 			[TT.XOR, "^"],
 			[TT.MUL, "*"],
 			[TT.RSHIFT, ">>"],
+			[TT.ASSIGN, "="],
+			[TT.ADDTO, "+="],
+			[TT.SUBBY, "-="],
 		]);
 		const operation = operationMap.get(node.opToken.tokenType);
 
@@ -1161,9 +1185,72 @@ class Compiler {
 				new CodingError(
 					node.opToken.startPos,
 					node.opToken.endPos,
-					"Undefined operation."
+					`Undefined operation: ${node.opToken}`
 				)
 			);
+		}
+
+		if (["=", "+=", "-="].includes(operation)) {
+			const varData = res.register(env.getSymbol(node.left));
+			if (res.error) return res;
+			if (env.constants.includes(node.left.symbol)) {
+				return res.fail(
+					new SymbolError(
+						node.left.startPos,
+						node.left.endPos,
+						`Cannot modify the value of constant '${node.left.symbol}'.`
+					)
+				);
+			}
+
+			const value = res.register(this.visit(node.right, env));
+			if (res.error) return res;
+
+			if (varData[1] != value[1]) {
+				return res.fail(
+					new CustomTypeError(
+						node.opToken.startPos,
+						node.opToken.endPos,
+						`Incompatible operation ('${operation}') between [${varData[1]}] and [${value[1]}].`
+					)
+				);
+			}
+
+			this.loadImmediate(varData[0]);
+			this.comment(node.left.symbol);
+			switch (operation) {
+				case "=":
+					if (!env.definedVars.includes(node.left.symbol))
+						env.definedVars.push(node.left.symbol);
+					this.write("COMP D M");
+					break;
+				case "+=":
+					if (!env.definedVars.includes(node.left.symbol)) {
+						return res.fail(
+							new SymbolError(
+								node.right.startPos,
+								node.right.endPos,
+								`Symbol '${node.left.symbol}' hasn't been assigned to a value yet.`
+							)
+						);
+					}
+					this.write("COMP D+M DM");
+					break;
+				case "-=":
+					if (!env.definedVars.includes(node.left.symbol)) {
+						return res.fail(
+							new SymbolError(
+								node.right.startPos,
+								node.right.endPos,
+								`Symbol '${node.left.symbol}' hasn't been assigned to a value yet.`
+							)
+						);
+					}
+					this.write("COMP M-D DM");
+					break;
+			}
+
+			return res.success([value[0], varData[1]]);
 		}
 
 		const leftPos = this.instructions.length;
@@ -1512,6 +1599,7 @@ class Compiler {
 		res.register(env.defineSymbol(node.symbol, "var", node.dataType));
 
 		if (value[0]) {
+			env.definedVars.push(node.symbol.symbol);
 			if (this.KNOWN_VALUES.includes(value[0]))
 				this.instructions = this.instructions.slice(0, startPos);
 			this.loadImmediate(address);
