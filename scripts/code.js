@@ -1403,7 +1403,7 @@ class Compiler {
 
 		const value = node.value
 			? res.register(this.visit(node.value, env))
-			: null;
+			: [null, node.dataType];
 		if (res.error) return res;
 
 		if (value[1] != node.dataType) {
@@ -1411,14 +1411,14 @@ class Compiler {
 				new CustomTypeError(
 					node.startPos,
 					node.endPos,
-					`Cannot assign [${value[1]}] to [${node.dataType.value}].`
+					`Cannot assign [${value[1]}] to [${node.dataType}].`
 				)
 			);
 		}
 
 		res.register(env.defineSymbol(node.symbol, "var", node.dataType));
 
-		if (value) {
+		if (value[0]) {
 			if (this.KNOWN_VALUES.includes(value[0]))
 				this.instructions = this.instructions.slice(0, startPos);
 			this.loadImmediate(address);
