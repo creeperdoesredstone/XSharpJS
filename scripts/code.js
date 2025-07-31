@@ -610,6 +610,15 @@ class WhileLoop {
 	}
 }
 
+class IfStatement {
+	constructor(startPos, endPos, cases, elseCase) {
+		this.startPos = startPos;
+		this.endPos = endPos;
+		this.cases = cases;
+		this.elseCase = elseCase;
+	}
+}
+
 class Parser {
 	constructor(tokens) {
 		this.tokens = tokens;
@@ -720,6 +729,8 @@ class Parser {
 					return this.forLoop();
 				case "while":
 					return this.whileLoop();
+				case "if":
+					return this.ifStatement();
 			}
 		}
 		return this.expr();
@@ -994,6 +1005,123 @@ class Parser {
 		}
 
 		return res.success(new WhileLoop(startPos, endPos, condition, body));
+	}
+
+	ifStatement() {
+		const startPos = this.currentTok.startPos;
+		const res = new CompileResult();
+		this.advance();
+
+		const cases = [];
+		let elseCase = null;
+
+		if (this.currentTok.tokenType != TT.LPR) {
+			return res.fail(
+				this.failCurrentTok("Expected '(' after 'if' keyword.")
+			);
+		}
+		this.advance();
+
+		let condition = res.register(this.expr());
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType != TT.RPR) {
+			return res.fail(
+				this.failCurrentTok("Expected ')' after condition.")
+			);
+		}
+		this.advance();
+
+		if (this.currentTok.tokenType != TT.LBR) {
+			return res.fail(this.failCurrentTok("Expected '{' after ')'."));
+		}
+		this.advance();
+
+		let body = res.register(this.statements([TT.EOF, TT.RBR]));
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType != TT.RBR) {
+			return res.fail(
+				this.failCurrentTok("Expected '}' after code block.")
+			);
+		}
+		this.advance();
+		cases.push([condition, body]);
+
+		while (this.currentTok.tokenType == TT.NEWLINE) this.advance();
+
+		const elseIfToken = new Token(null, null, TT.KEYWORD, "elseif");
+		const elseToken = new Token(null, null, TT.KEYWORD, "else");
+		let endPos;
+
+		while (this.currentTok.equals(elseIfToken)) {
+			this.advance();
+			if (this.currentTok.tokenType != TT.LPR) {
+				return res.fail(
+					this.failCurrentTok("Expected '(' after 'elseif' keyword.")
+				);
+			}
+			this.advance();
+
+			let condition = res.register(this.expr());
+			if (res.error) return res;
+
+			if (this.currentTok.tokenType != TT.RPR) {
+				return res.fail(
+					this.failCurrentTok("Expected ')' after condition.")
+				);
+			}
+			this.advance();
+
+			if (this.currentTok.tokenType != TT.LBR) {
+				return res.fail(this.failCurrentTok("Expected '{' after ')'."));
+			}
+			this.advance();
+
+			let body = res.register(this.statements([TT.EOF, TT.RBR]));
+			if (res.error) return res;
+
+			if (this.currentTok.tokenType != TT.RBR) {
+				return res.fail(
+					this.failCurrentTok("Expected '}' after code block.")
+				);
+			}
+			endPos = this.currentTok.endPos;
+			this.advance();
+			cases.push([condition, body]);
+
+			while (this.currentTok.tokenType == TT.NEWLINE) this.advance();
+		}
+
+		if (this.currentTok.equals(elseToken)) {
+			this.advance();
+			if (this.currentTok.tokenType != TT.LBR) {
+				return res.fail(
+					this.failCurrentTok("Expected '{' after else keyword.")
+				);
+			}
+			this.advance();
+			elseCase = res.register(this.statements([TT.EOF, TT.RBR]));
+			if (res.error) return res;
+
+			if (this.currentTok.tokenType != TT.RBR) {
+				return res.fail(
+					this.failCurrentTok("Expected '}' after code block.")
+				);
+			}
+			endPos = this.currentTok.endPos;
+			this.advance();
+		}
+
+		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+			return res.fail(
+				this.failCurrentTok(
+					"Expected a newline or EOF after code block."
+				)
+			);
+		}
+
+		return res.success(new IfStatement(startPos, endPos, cases, elseCase));
 	}
 
 	expr() {
@@ -1470,6 +1598,7 @@ class Compiler {
 
 			if (trimmed.startsWith(".") && prev && prev.startsWith(".")) {
 				removedLabels.set(prev, trimmed);
+				console.log(removedLabels);
 				continue;
 			}
 
@@ -1792,19 +1921,26 @@ class Compiler {
 			if (Number.isInteger(left[0]) && Number.isInteger(right[0])) {
 				this.instructions = this.instructions.slice(0, leftPos);
 				let value = eval(`${left[0]} ${operation} ${right[0]}`);
+				let isBoolean = false;
 
 				if (typeof value === "boolean") {
 					value = value ? -1 : 0;
+					isBoolean = true;
 				}
 
-				return this.visitNumericLiteral(
+				const valueLiteral = this.visitNumericLiteral(
 					new NumericLiteral(
 						null,
 						null,
 						new Token(null, null, TT.NUM, value)
 					),
 					env
-				);
+				).value;
+
+				return res.success([
+					valueLiteral[0],
+					isBoolean ? "bool" : "int",
+				]);
 			}
 		} else if (left[1] === "bool") {
 			if ("&|^".indexOf(operation) == -1) {
@@ -2287,6 +2423,61 @@ class Compiler {
 		this.tabs--;
 		this.write(`.endWhile${whileJmp}`);
 
+		return res.success([null, null]);
+	}
+
+	visitIfStatement(node, env) {
+		const res = new CompileResult();
+		const endIfJmp = this.makeNewJump();
+		let ifBlockJmp, condition, startPos;
+
+		for (const ifCase of node.cases) {
+			// ifCase is an array, where [0] = condition and [1] = body
+			ifBlockJmp = this.makeNewJump();
+			startPos = this.instructions.length;
+			condition = res.register(this.visit(ifCase[0], env));
+			if (res.error) return res;
+
+			if (condition[1] !== "bool") {
+				return res.fail(
+					new CustomTypeError(
+						ifCase[0].startPos,
+						ifCase[0].endPos,
+						"Condition must be a boolean."
+					)
+				);
+			}
+
+			if (condition[0] === -1) {
+				this.instructions = this.instructions.slice(0, startPos);
+				res.register(this.visit(ifCase[1], env));
+				if (res.error) return res;
+				if ((ifBlockJmp - endIfJmp) > 1) this.write(`.endIf${endIfJmp}`);
+				return res.success([null, null]);
+			}
+			if (condition[0] === 0) {
+				this.instructions = this.instructions.slice(0, startPos);
+				this.jumps--;
+				continue;
+			}
+
+			this.loadImmediate(`.endIfBlock${ifBlockJmp}`);
+			this.write("COMP D JEQ");
+
+			res.register(this.visit(ifCase[1], env));
+			if (res.error) return res;
+
+			if ((ifBlockJmp - endIfJmp) > 1) this.loadImmediate(`.endIf${endIfJmp}`);
+			this.write("COMP 0 JMP");
+			this.write(`.endIfBlock${ifBlockJmp}`);
+		}
+
+		if (node.elseCase) {
+			res.register(this.visit(node.elseCase, env));
+			if (res.error) return res;
+		}
+
+		if ((ifBlockJmp - endIfJmp) > 1) this.write(`.endIf${endIfJmp}`);
 		return res.success([null, null]);
 	}
 }
