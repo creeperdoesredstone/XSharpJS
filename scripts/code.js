@@ -98,6 +98,34 @@ class Position {
 	}
 }
 
+const errorWithArrows = (ftxt, startPos, endPos) => {
+	const lines = ftxt.split("\n");
+	const startLine = startPos.line;
+	const endLine = endPos.line;
+
+	const relevantLines = lines.slice(startLine, endLine + 1);
+
+	const arrows = relevantLines.map((line, idx) => {
+		let arrowLine = "";
+		if (idx === 0 && startLine === endLine) {
+			arrowLine =
+				" ".repeat(startPos.col) +
+				"^".repeat(endPos.col - startPos.col + 1);
+		} else if (idx === 0) {
+			arrowLine =
+				" ".repeat(startPos.col) +
+				"^".repeat(line.length - startPos.col);
+		} else if (idx === relevantLines.length - 1) {
+			arrowLine = "^".repeat(endPos.col + 1);
+		} else {
+			arrowLine = "^".repeat(line.length);
+		}
+		return arrowLine;
+	});
+
+	return relevantLines.join("\n") + "\n" + arrows.join("\n");
+};
+
 class CustomError {
 	constructor(startPos, endPos, errorName, details) {
 		this.startPos = startPos;
@@ -109,9 +137,11 @@ class CustomError {
 	toString() {
 		return `File ${this.startPos.fn}, line ${
 			this.startPos.line + 1
-		}, column ${this.startPos.col + 1}:\n\n${this.errorName}: ${
-			this.details
-		}`;
+		}, column ${this.startPos.col + 1}:\n\n${errorWithArrows(
+			this.startPos.ftxt,
+			this.startPos,
+			this.endPos
+		)}\n\n${this.errorName}: ${this.details}`;
 	}
 }
 
@@ -491,6 +521,41 @@ class NumericLiteral {
 
 	toString() {
 		return `NUM[${this.value}]`;
+	}
+}
+
+class ArrayLiteral {
+	constructor(startPos, endPos, elements) {
+		this.startPos = startPos;
+		this.endPos = endPos;
+		this.elements = elements;
+		this.length = elements.length;
+	}
+
+	validateArray() {
+		const res = new CompileResult();
+		if (!this.length) return res.success(null);
+		console.log(this.elements[0]);
+
+		const firstElementType =
+			this.elements[0] instanceof ArrayLiteral ? "array" : "expression";
+		for (let i = 0; i < this.length; i++) {
+			const element = this.elements[i];
+			const elementType =
+				element instanceof ArrayLiteral ? "array" : "expression";
+			if (elementType !== firstElementType) {
+				return res.fail(
+					new CustomError(
+						element.startPos,
+						element.endPos,
+						"ArrayError",
+						`Element [${i}] is not an ${firstElementType}.`
+					)
+				);
+			}
+		}
+
+		return res.success(null);
 	}
 }
 
@@ -940,7 +1005,7 @@ class Parser {
 		}
 		const endPos = this.currentTok.endPos;
 		this.advance();
-		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+		if (!this.endOfLine()) {
 			return res.fail(
 				this.failCurrentTok("Expected a newline or EOF after '}'.")
 			);
@@ -998,7 +1063,7 @@ class Parser {
 		}
 		const endPos = this.currentTok.endPos;
 		this.advance();
-		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+		if (!this.endOfLine()) {
 			return res.fail(
 				this.failCurrentTok("Expected a newline or EOF after '}'.")
 			);
@@ -1113,7 +1178,7 @@ class Parser {
 			this.advance();
 		}
 
-		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+		if (!this.endOfLine()) {
 			return res.fail(
 				this.failCurrentTok(
 					"Expected a newline or EOF after code block."
@@ -1282,8 +1347,21 @@ class Parser {
 					return this.castExpression(tok.startPos);
 				}
 
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
 				const expression = res.register(this.expr());
 				if (res.error) return res;
+
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
 
 				if (this.currentTok.tokenType != TT.RPR) {
 					return res.fail(
@@ -1297,12 +1375,75 @@ class Parser {
 
 				this.advance();
 				return res.success(expression);
+			case TT.LSQ:
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
+
+				const elements = [];
+				if (this.currentTok.tokenType === TT.RSQ) {
+					return res.success(
+						new ArrayLiteral(
+							tok.startPos,
+							this.currentTok.endPos,
+							elements
+						)
+					);
+				}
+
+				let element = res.register(this.expr());
+				if (res.error) return res;
+				elements.push(element);
+
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
+
+				while (this.currentTok.tokenType === TT.COMMA) {
+					this.advance();
+					while (
+						this.currentTok.equals(
+							new Token(null, null, TT.NEWLINE, "\n")
+						)
+					)
+						this.advance();
+
+					element = res.register(this.expr());
+					if (res.error) return res;
+					elements.push(element);
+
+					while (
+						this.currentTok.equals(
+							new Token(null, null, TT.NEWLINE, "\n")
+						)
+					)
+						this.advance();
+				}
+
+				if (this.currentTok.tokenType !== TT.RSQ) {
+					return res.fail(
+						this.failCurrentTok("Expected ',' or ']'.")
+					);
+				}
+				const endPos = this.currentTok.endPos;
+				this.advance();
+
+				const array = new ArrayLiteral(tok.startPos, endPos, elements);
+				res.register(array.validateArray());
+				if (res.error) return res;
+				return res.success(array);
 			default:
 				return res.fail(
 					new InvalidSyntax(
 						tok.startPos,
 						tok.endPos,
-						`Expected a number or an identifier, found token ${tok} instead.`
+						`Expected a number, an identifier, '(', '[' found token ${tok} instead.`
 					)
 				);
 		}
@@ -2452,7 +2593,7 @@ class Compiler {
 				this.instructions = this.instructions.slice(0, startPos);
 				res.register(this.visit(ifCase[1], env));
 				if (res.error) return res;
-				if ((ifBlockJmp - endIfJmp) > 1) this.write(`.endIf${endIfJmp}`);
+				if (ifBlockJmp - endIfJmp > 1) this.write(`.endIf${endIfJmp}`);
 				this.jumps--;
 				return res.success([null, null]);
 			}
@@ -2478,7 +2619,7 @@ class Compiler {
 			if (res.error) return res;
 		}
 
-		if ((ifBlockJmp - endIfJmp) > 1) this.write(`.endIf${endIfJmp}`);
+		if (ifBlockJmp - endIfJmp > 1) this.write(`.endIf${endIfJmp}`);
 		return res.success([null, null]);
 	}
 }
@@ -2491,6 +2632,8 @@ const run = (fn, ftxt) => {
 	const parser = new Parser(lexResult.value);
 	const ast = parser.parse();
 	if (ast.error) return ast;
+
+	console.log(ast.value);
 
 	const compiler = new Compiler();
 	const result = compiler.compile(ast.value);
@@ -2510,6 +2653,30 @@ document.addEventListener("keydown", (e) => {
 			"\t" +
 			textarea.value.substring(end);
 		textarea.selectionStart = textarea.selectionEnd = start + 1;
+	}
+	if (e.key === "Enter" && e.target.id === "codeEdit") {
+		setTimeout(() => {
+			const textarea = e.target;
+			const start = textarea.selectionStart;
+			const value = textarea.value;
+
+			const prevLineStart = value.lastIndexOf("\n", start - 2) + 1;
+			const prevLineEnd = value.indexOf("\n", prevLineStart);
+			const prevLine =
+				prevLineEnd === -1
+					? value.slice(prevLineStart)
+					: value.slice(prevLineStart, prevLineEnd);
+
+			const indentMatch = prevLine.match(/^[\t ]*/);
+			const indent = indentMatch ? indentMatch[0] : "";
+
+			const newPos = textarea.selectionStart + indent.length;
+			textarea.value =
+				value.substring(0, textarea.selectionStart) +
+				indent +
+				value.substring(textarea.selectionStart);
+			textarea.selectionStart = textarea.selectionEnd = newPos;
+		}, 0);
 	}
 });
 
