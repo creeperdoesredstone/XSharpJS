@@ -1,11 +1,44 @@
+@keyframes background-pan {
+	0% {
+		background-position: 0% 0%;
+	}
+	100% {
+		background-position: 100% 0%;
+	}
+}
+
 * {
 	margin: 0;
 	padding: 0;
-	font-family: 'Pixelated', 'JetBrains Mono', monospace;
+	font-family: "Pixelated", "JetBrains Mono", monospace;
 }
 
 body {
 	background-color: rgb(0, 0, 0);
+}
+
+.all::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.9);
+	pointer-events: none;
+	z-index: 0;
+}
+
+.all {
+	position: relative;
+	z-index: 1;
+	width: 100vw;
+	height: 100vh;
+	background-image: url("images/tile.png");
+	background-size: 10%;
+	animation: background-pan 30s linear infinite;
+}
+
+.all > * {
+	position: relative;
+	z-index: 2;
 }
 
 #home {
@@ -40,17 +73,20 @@ body {
 	margin-bottom: 10px;
 }
 
-#runButton {
+#runButton,
+#assembleButton {
 	border-radius: 5px;
 	color: white;
 	border: white 1px solid;
 	background-color: rgb(0, 30, 105);
 	margin: 5px;
 	padding: 10px;
-	transition: color 500ms, background-color 500ms, border 500ms, box-shadow 300ms, transform 200ms;
+	transition: color 500ms, background-color 500ms, border 500ms,
+		box-shadow 300ms, transform 200ms;
 }
 
-#runButton:hover {
+#runButton:hover,
+#assembleButton:hover {
 	background-color: rgb(155, 152, 255);
 	color: black;
 	border: black 1px solid;
@@ -60,14 +96,15 @@ body {
 
 textarea {
 	background-color: rgb(18, 18, 18);
-	font-family: 'JetBrains Mono', monospace;
+	font-family: "JetBrains Mono", monospace;
 	font-size: 14px;
 	color: white;
 	padding: 6px;
 	tab-size: 33.6875px;
 	resize: none;
 	border-radius: 0;
-	transition: background-color 500ms, transform 500ms, box-shadow 300ms, border-radius 800ms;
+	transition: background-color 500ms, transform 500ms, box-shadow 300ms,
+		border-radius 800ms;
 }
 
 textarea:focus {
