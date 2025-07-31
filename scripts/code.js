@@ -2453,6 +2453,7 @@ class Compiler {
 				res.register(this.visit(ifCase[1], env));
 				if (res.error) return res;
 				if ((ifBlockJmp - endIfJmp) > 1) this.write(`.endIf${endIfJmp}`);
+				this.jumps--;
 				return res.success([null, null]);
 			}
 			if (condition[0] === 0) {
@@ -2467,7 +2468,7 @@ class Compiler {
 			res.register(this.visit(ifCase[1], env));
 			if (res.error) return res;
 
-			if ((ifBlockJmp - endIfJmp) > 1) this.loadImmediate(`.endIf${endIfJmp}`);
+			this.loadImmediate(`.endIf${endIfJmp}`);
 			this.write("COMP 0 JMP");
 			this.write(`.endIfBlock${ifBlockJmp}`);
 		}
