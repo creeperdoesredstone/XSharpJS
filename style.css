@@ -103,8 +103,20 @@ textarea {
 	tab-size: 33.6875px;
 	resize: none;
 	border-radius: 0;
-	transition: background-color 500ms, transform 500ms, box-shadow 300ms,
-		border-radius 800ms;
+	scroll-padding: 4px;
+	scrollbar-color: #fff #444; /* For Firefox */
+	/* For Chrome, Edge, and Safari */
+	&::-webkit-scrollbar {
+		width: 8px;
+	}
+	&::-webkit-scrollbar-thumb {
+		background: #fff;
+		border-radius: 4px;
+	}
+	&::-webkit-scrollbar-track {
+		background: #444;
+	}
+	transition: background-color 500ms, transform 500ms, box-shadow 300ms;
 }
 
 textarea:focus {
@@ -112,5 +124,4 @@ textarea:focus {
 	background-color: rgb(24, 24, 24);
 	transform: scale(1.02);
 	box-shadow: 0 0 10px 5px black;
-	border-radius: 10px;
 }
