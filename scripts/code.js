@@ -1442,7 +1442,8 @@ class Compiler {
 		const res = new CompileResult();
 		if (
 			identifier instanceof Identifier &&
-			!env.definedVars.includes(identifier.symbol)
+			!env.definedVars.includes(identifier.symbol) &&
+			!env.constants.includes(identifier.symbol)
 		) {
 			return res.fail(
 				new SymbolError(
