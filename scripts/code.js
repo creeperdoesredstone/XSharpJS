@@ -601,6 +601,15 @@ class ForLoop {
 	}
 }
 
+class WhileLoop {
+	constructor(startPos, endPos, condition, body) {
+		this.startPos = startPos;
+		this.endPos = endPos;
+		this.condition = condition;
+		this.body = body;
+	}
+}
+
 class Parser {
 	constructor(tokens) {
 		this.tokens = tokens;
@@ -709,6 +718,8 @@ class Parser {
 					return this.constDefinition();
 				case "for":
 					return this.forLoop();
+				case "while":
+					return this.whileLoop();
 			}
 		}
 		return this.expr();
@@ -937,6 +948,52 @@ class Parser {
 				stepToken
 			)
 		);
+	}
+
+	whileLoop() {
+		const startPos = this.currentTok.startPos;
+		const res = new CompileResult();
+		this.advance();
+
+		if (this.currentTok.tokenType !== TT.LPR) {
+			return res.fail(
+				this.failCurrentTok("Expected '(' after 'while' keyword.")
+			);
+		}
+		this.advance();
+
+		const condition = res.register(this.expr());
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType !== TT.RPR) {
+			return res.fail(
+				this.failCurrentTok("Expected ')' after 'while' keyword.")
+			);
+		}
+		this.advance();
+
+		if (this.currentTok.tokenType !== TT.LBR) {
+			return res.fail(this.failCurrentTok("Expected '{' after ')'."));
+		}
+		this.advance();
+
+		const body = res.register(this.statements([TT.EOF, TT.RBR]));
+		if (res.error) return res;
+
+		if (this.currentTok.tokenType !== TT.RBR) {
+			return res.fail(
+				this.failCurrentTok("Expected '}' after code block.")
+			);
+		}
+		const endPos = this.currentTok.endPos;
+		this.advance();
+		if (![TT.NEWLINE, TT.EOF].includes(this.currentTok.tokenType)) {
+			return res.fail(
+				this.failCurrentTok("Expected a newline or EOF after '}'.")
+			);
+		}
+
+		return res.success(new WhileLoop(startPos, endPos, condition, body));
 	}
 
 	expr() {
@@ -1384,14 +1441,14 @@ class Compiler {
 
 		for (let i = 0; i < instructions.length; i++) {
 			let line = instructions[i];
-			let trimmedLine = line.trim();
+			let trimmed = line.trim();
 
-			if (!trimmedLine || trimmedLine.startsWith("//")) continue;
+			if (!trimmed || trimmed.startsWith("//")) continue;
 
-			if (trimmedLine === prev) continue;
+			if (trimmed === prev) continue;
 
-			if (trimmedLine.startsWith("LDIA")) {
-				let value = trimmedLine.split(" ")[1];
+			if (trimmed.startsWith("LDIA")) {
+				let value = trimmed.split(" ")[1];
 
 				if (removedLabels.has(value)) {
 					value = removedLabels.get(value);
@@ -1401,21 +1458,23 @@ class Compiler {
 					if (prev && !prev.startsWith(".")) continue;
 				}
 				lastLoaded = value;
-			} else if (trimmedLine.startsWith("COMP")) {
-				if (trimmedLine === "COMP M D" && prev && prev === "COMP D M")
+			} else if (trimmed.startsWith("COMP")) {
+				if (trimmed === "COMP M D" && prev && prev === "COMP D M") {
 					continue;
+				}
 			} else lastLoaded = null;
 
-			if (afterJump && !trimmedLine.startsWith(".")) continue;
+			if (prev && prev.startsWith(".")) afterJump = false;
+			if (afterJump && !trimmed.startsWith(".")) continue;
 			afterJump = prev && prev.endsWith("JMP");
 
-			if (trimmedLine.startsWith(".") && prev && prev.startsWith(".")) {
-				removedLabels.set(prev, trimmedLine);
+			if (trimmed.startsWith(".") && prev && prev.startsWith(".")) {
+				removedLabels.set(prev, trimmed);
 				continue;
 			}
 
 			optimized.push(line);
-			prev = trimmedLine;
+			prev = trimmed;
 		}
 
 		return optimized;
@@ -1668,11 +1727,11 @@ class Compiler {
 					if (res.error) return res;
 					this.write(
 						value[0] == 0
-							? "COMP D M"
+							? ""
 							: value[0] == 1
-							? "COMP D++ M"
+							? "COMP M++ M"
 							: value[0] == -1
-							? "COMP D-- M"
+							? "COMP M-- M"
 							: "COMP D+M DM"
 					);
 					break;
@@ -1688,11 +1747,11 @@ class Compiler {
 					if (res.error) return res;
 					this.write(
 						value[0] == 0
-							? "COMP D M"
+							? "COMP M M"
 							: value[0] == 1
-							? "COMP D-- M"
+							? "COMP M-- M"
 							: value[0] == -1
-							? "COMP D++ M"
+							? "COMP M++ M"
 							: "COMP M-D DM"
 					);
 			}
@@ -2195,6 +2254,39 @@ class Compiler {
 		}
 
 		this.tabs--;
+		return res.success([null, null]);
+	}
+
+	visitWhileLoop(node, env) {
+		const res = new CompileResult();
+		const whileJmp = this.makeNewJump();
+
+		this.write(`.whileLoop${whileJmp}`);
+		this.tabs += 1;
+
+		const condition = res.register(this.visit(node.condition, env));
+		if (res.error) return res;
+
+		if (condition[1] !== "bool") {
+			return res.fail(
+				new CustomTypeError(
+					node.condition.startPos,
+					node.condition.endPos,
+					"Condition must be a boolean."
+				)
+			);
+		}
+		this.loadImmediate(`.endWhile${whileJmp}`);
+		this.write("COMP D JEQ");
+
+		res.register(this.visit(node.body, env));
+		if (res.error) return res;
+
+		this.loadImmediate(`.whileLoop${whileJmp}`);
+		this.write("COMP 0 JMP");
+		this.tabs--;
+		this.write(`.endWhile${whileJmp}`);
+
 		return res.success([null, null]);
 	}
 }
