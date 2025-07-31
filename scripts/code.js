@@ -956,7 +956,7 @@ class Parser {
 					new InvalidSyntax(
 						left.startPos,
 						left.endPos,
-						"A value can only be assigned to an idenitifer."
+						"A value can only be assigned to an identifier."
 					)
 				);
 			}
@@ -1383,14 +1383,15 @@ class Compiler {
 		const removedLabels = new Map();
 
 		for (let i = 0; i < instructions.length; i++) {
-			let line = instructions[i].trim();
+			let line = instructions[i];
+			let trimmedLine = line.trim();
 
-			if (!line || line.startsWith("//")) continue;
+			if (!trimmedLine || trimmedLine.startsWith("//")) continue;
 
-			if (line === prev) continue;
+			if (trimmedLine === prev) continue;
 
-			if (line.startsWith("LDIA")) {
-				let value = line.split(" ")[1];
+			if (trimmedLine.startsWith("LDIA")) {
+				let value = trimmedLine.split(" ")[1];
 
 				if (removedLabels.has(value)) {
 					value = removedLabels.get(value);
@@ -1400,21 +1401,21 @@ class Compiler {
 					if (prev && !prev.startsWith(".")) continue;
 				}
 				lastLoaded = value;
-			} else if (line.startsWith("COMP")) {
-				if (line === "COMP M D" && prev && prev === "COMP D M")
+			} else if (trimmedLine.startsWith("COMP")) {
+				if (trimmedLine === "COMP M D" && prev && prev === "COMP D M")
 					continue;
 			} else lastLoaded = null;
 
-			if (afterJump && !line.startsWith(".")) continue;
+			if (afterJump && !trimmedLine.startsWith(".")) continue;
 			afterJump = prev && prev.endsWith("JMP");
 
-			if (line.startsWith(".") && prev && prev.startsWith(".")) {
-				removedLabels.set(prev, line);
+			if (trimmedLine.startsWith(".") && prev && prev.startsWith(".")) {
+				removedLabels.set(prev, trimmedLine);
 				continue;
 			}
 
 			optimized.push(line);
-			prev = line;
+			prev = trimmedLine;
 		}
 
 		return optimized;
@@ -1623,6 +1624,7 @@ class Compiler {
 				);
 			}
 
+			const valuePos = this.instructions.length;
 			const value = res.register(this.visit(node.right, env));
 			if (res.error) return res;
 
@@ -1636,24 +1638,62 @@ class Compiler {
 				);
 			}
 
-			this.loadImmediate(varData[0]);
-			this.comment(node.left.symbol);
 			switch (operation) {
 				case "=":
+					if (this.KNOWN_VALUES.includes(value[0]))
+						this.instructions = this.instructions.slice(
+							0,
+							valuePos
+						);
+					this.loadImmediate(varData[0]);
+					this.comment(node.left.symbol);
 					if (!env.definedVars.includes(node.left.symbol))
 						env.definedVars.push(node.left.symbol);
-					this.write("COMP D M");
+					this.write(
+						this.KNOWN_VALUES.includes(value[0])
+							? `COMP ${value[0]} M`
+							: "COMP D M"
+					);
 					break;
 				case "+=":
+					if ([0, 1, -1].includes(value[0]))
+						this.instructions = this.instructions.slice(
+							0,
+							valuePos
+						);
+					this.loadImmediate(varData[0]);
+					this.comment(node.left.symbol);
 					res.register(this.validateVariable(node.left, env));
 					if (res.error) return res;
-					this.write("COMP D+M DM");
+					this.write(
+						value[0] == 0
+							? "COMP D M"
+							: value[0] == 1
+							? "COMP D++ M"
+							: value[0] == -1
+							? "COMP D-- M"
+							: "COMP D+M DM"
+					);
 					break;
 				case "-=":
+					if ([0, 1, -1].includes(value[0]))
+						this.instructions = this.instructions.slice(
+							0,
+							valuePos
+						);
+					this.loadImmediate(varData[0]);
+					this.comment(node.left.symbol);
 					res.register(this.validateVariable(node.left, env));
 					if (res.error) return res;
-					this.write("COMP M-D DM");
-					break;
+					this.write(
+						value[0] == 0
+							? "COMP D M"
+							: value[0] == 1
+							? "COMP D-- M"
+							: value[0] == -1
+							? "COMP D++ M"
+							: "COMP M-D DM"
+					);
 			}
 
 			return res.success([value[0], varData[1]]);
@@ -2058,6 +2098,103 @@ class Compiler {
 		}
 
 		return res.success([null, node.dataType]);
+	}
+
+	visitForLoop(node, env) {
+		const res = new CompileResult();
+		const operationMap = new Map([
+			[TT.ADD, "+"],
+			[TT.SUB, "-"],
+			[TT.AND, "&"],
+			[TT.OR, "|"],
+			[TT.XOR, "^"],
+			[TT.MUL, "*"],
+			[TT.RSHIFT, ">>"],
+			[TT.LSHIFT, "<<"],
+			[TT.ASSIGN, "="],
+			[TT.ADDTO, "+="],
+			[TT.SUBBY, "-="],
+			[TT.LT, "<"],
+			[TT.LE, "<="],
+			[TT.GT, ">"],
+			[TT.GE, ">="],
+			[TT.EQ, "=="],
+			[TT.NE, "!="],
+		]);
+		const endOperation = operationMap.get(node.endToken.tokenType);
+
+		const startValue = res.register(
+			this.visit(
+				new BinaryOperation(
+					node.identifier.startPos,
+					node.startValue.endPos,
+					node.identifier,
+					new Token(null, null, TT.ASSIGN),
+					node.startValue
+				),
+				env
+			)
+		);
+		if (res.error) return res;
+
+		const forJmp = this.makeNewJump();
+		this.write(`.forLoop${forJmp}`);
+		this.tabs++;
+
+		res.register(this.visit(node.body, env));
+		if (res.error) return res;
+
+		res.register(
+			this.visit(
+				new BinaryOperation(
+					node.stepValue.startPos,
+					node.stepValue.endPos,
+					node.identifier,
+					node.stepToken,
+					node.stepValue
+				),
+				env
+			)
+		);
+		if (res.error) return res;
+
+		const endValue = res.register(this.visit(node.endValue, env));
+		if (res.error) return res;
+
+		if (endValue[1] !== startValue[1]) {
+			return res.fail(
+				new CustomTypeError(
+					node.opToken.startPos,
+					node.opToken.endPos,
+					`Incompatible operation ('${endOperation}') between [${startValue[1]}] and [${endValue[1]}].`
+				)
+			);
+		}
+
+		const symbol = res.register(env.getSymbol(node.identifier));
+		if (res.error) return res;
+		this.loadImmediate(symbol[0]);
+		this.comment(node.identifier.symbol);
+		this.write("COMP D-M D");
+
+		this.loadImmediate(`.forLoop${forJmp}`);
+		switch (endOperation) {
+			case "<":
+				this.write("COMP D JGT");
+				break;
+			case "<=":
+				this.write("COMP D JGE");
+				break;
+			case ">":
+				this.write("COMP D JLT");
+				break;
+			case ">=":
+				this.write("COMP D JLE");
+				break;
+		}
+
+		this.tabs--;
+		return res.success([null, null]);
 	}
 }
 
