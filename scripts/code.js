@@ -532,10 +532,9 @@ class ArrayLiteral {
 		this.length = elements.length;
 	}
 
-	validateArray() {
+	validateArray(path = []) {
 		const res = new CompileResult();
 		if (!this.length) return res.success(null);
-		console.log(this.elements[0]);
 
 		const firstElementType =
 			this.elements[0] instanceof ArrayLiteral ? "array" : "expression";
@@ -549,13 +548,58 @@ class ArrayLiteral {
 						element.startPos,
 						element.endPos,
 						"ArrayError",
-						`Element [${i}] is not an ${firstElementType}.`
+						`Element [${[...path, i].join(
+							"]["
+						)}] is not an ${firstElementType}.`
 					)
 				);
 			}
 		}
 
+		if (firstElementType === "expression") return res.success(null);
+
+		const firstShape = this.elements[0].getShape();
+		for (let i = 0; i < this.length; i++) {
+			const element = this.elements[i];
+			const shape = element.getShape();
+			if (!ArrayLiteral.shapesEqual(firstShape, shape)) {
+				return res.fail(
+					new CustomError(
+						element.startPos,
+						element.endPos,
+						"LengthError",
+						`Element ${[
+							...path,
+							i,
+						]} does not match the expected array shape ${JSON.stringify(
+							firstShape
+						)}.`
+					)
+				);
+			}
+			const nestedRes = element.validateArray([...path, i]);
+			if (nestedRes.error) return nestedRes
+		}
+
 		return res.success(null);
+	}
+
+	toString() {
+		return `[${this.elements}]`;
+	}
+
+	getShape() {
+		if (!(this.elements[0] instanceof ArrayLiteral)) return [this.length];
+
+		return [this.length, ...this.elements[0].getShape()];
+	}
+
+	static shapesEqual(a, b) {
+		if (a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i++) {
+			if (a[i] !== b[i]) return false;
+		}
+		return true;
 	}
 }
 
@@ -984,7 +1028,6 @@ class Parser {
 		if (res.error) return res;
 
 		if (this.currentTok.tokenType !== TT.RPR) {
-			console.log(this.currentTok);
 			return res.fail(
 				this.failCurrentTok("Expected ')' after step value.")
 			);
@@ -1385,6 +1428,7 @@ class Parser {
 
 				const elements = [];
 				if (this.currentTok.tokenType === TT.RSQ) {
+					this.advance();
 					return res.success(
 						new ArrayLiteral(
 							tok.startPos,
@@ -1435,8 +1479,6 @@ class Parser {
 				this.advance();
 
 				const array = new ArrayLiteral(tok.startPos, endPos, elements);
-				res.register(array.validateArray());
-				if (res.error) return res;
 				return res.success(array);
 			default:
 				return res.fail(
@@ -1739,7 +1781,6 @@ class Compiler {
 
 			if (trimmed.startsWith(".") && prev && prev.startsWith(".")) {
 				removedLabels.set(prev, trimmed);
-				console.log(removedLabels);
 				continue;
 			}
 
@@ -2622,6 +2663,14 @@ class Compiler {
 		if (ifBlockJmp - endIfJmp > 1) this.write(`.endIf${endIfJmp}`);
 		return res.success([null, null]);
 	}
+
+	visitArrayLiteral(node, env) {
+		const res = new CompileResult();
+		res.register(node.validateArray());
+		if (res.error) return res;
+
+		return res.success([null, null]);
+	}
 }
 
 const run = (fn, ftxt) => {
@@ -2632,8 +2681,6 @@ const run = (fn, ftxt) => {
 	const parser = new Parser(lexResult.value);
 	const ast = parser.parse();
 	if (ast.error) return ast;
-
-	console.log(ast.value);
 
 	const compiler = new Compiler();
 	const result = compiler.compile(ast.value);
