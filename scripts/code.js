@@ -2,6 +2,14 @@ const isDigit = (ch) => ch >= "0" && ch <= "9";
 const isLetter = (ch) => (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z");
 const isAlphaNumeric = (ch) => isDigit(ch) || isLetter(ch);
 
+const arrayEquals = (arr1, arr2) => {
+	if (arr1.length !== arr2.length) return false;
+	for (let i = 0; i < arr1.length; i++) {
+		if (arr1[i] !== arr2[i]) return false;
+	}
+	return true;
+};
+
 const KEYWORDS = [
 	"const",
 	"var",
@@ -322,63 +330,58 @@ class Lexer {
 				this.advance();
 			} else if (this.currentChar.match(/[\;\n]/)) {
 				let char = this.currentChar;
-				this.advance();
 				tokens.push(
 					new Token(startPos, this.pos.copy(), TT.NEWLINE, char)
 				);
+				this.advance();
 			} else if (this.currentChar == "&") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.AND));
+				this.advance();
 			} else if (this.currentChar == "|") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.OR));
+				this.advance();
 			} else if (this.currentChar == "~") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.NOT));
+				this.advance();
 			} else if (this.currentChar == "^") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.XOR));
+				this.advance();
 			} else if (this.currentChar == "#") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.ABS));
+				this.advance();
 			} else if (this.currentChar == "$") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.SIGN));
+				this.advance();
 			} else if (this.currentChar == "@") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.AT));
+				this.advance();
 			} else if (this.currentChar == "(") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.LPR));
+				this.advance();
 			} else if (this.currentChar == ")") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.RPR));
+				this.advance();
 			} else if (this.currentChar == "[") {
-				this.advance();
 				tokens.push(new Token(startPos, this.pos.copy(), TT.LSQ));
+				this.advance();
 			} else if (this.currentChar == "]") {
-				this.advance();
-				tokens.push(new Token(startPos, this.pos.copy(), TT.RSQ));
+				tokens.push(new Token(startPos, this.pos.copy(), TT.RSQ));this.advance();
 			} else if (this.currentChar == "{") {
-				this.advance();
-				tokens.push(new Token(startPos, this.pos.copy(), TT.LBR));
+				tokens.push(new Token(startPos, this.pos.copy(), TT.LBR));this.advance();
 			} else if (this.currentChar == "}") {
-				this.advance();
-				tokens.push(new Token(startPos, this.pos.copy(), TT.RBR));
+				tokens.push(new Token(startPos, this.pos.copy(), TT.RBR));this.advance();
 			} else if (this.currentChar == ":") {
-				this.advance();
-				tokens.push(new Token(startPos, this.pos.copy(), TT.COL));
+				tokens.push(new Token(startPos, this.pos.copy(), TT.COL));this.advance();
 			} else if (this.currentChar == ",") {
-				this.advance();
-				tokens.push(new Token(startPos, this.pos.copy(), TT.COMMA));
+				tokens.push(new Token(startPos, this.pos.copy(), TT.COMMA));this.advance();
 			} else if (this.currentChar == "+") {
 				this.advance();
 				if (this.currentChar == "+") {
-					this.advance();
 					tokens.push(new Token(startPos, this.pos.copy(), TT.INC));
-				} else if (this.currentChar == "=") {
 					this.advance();
+				} else if (this.currentChar == "=") {
 					tokens.push(new Token(startPos, this.pos.copy(), TT.ADDTO));
+					this.advance();
 				} else {
 					tokens.push(new Token(startPos, this.pos.copy(), TT.ADD));
 				}
@@ -578,7 +581,7 @@ class ArrayLiteral {
 				);
 			}
 			const nestedRes = element.validateArray([...path, i]);
-			if (nestedRes.error) return nestedRes
+			if (nestedRes.error) return nestedRes;
 		}
 
 		return res.success(null);
@@ -643,12 +646,13 @@ class UnaryOperation {
 }
 
 class VarDeclaration {
-	constructor(startPos, endPos, symbol, dataType, value) {
+	constructor(startPos, endPos, symbol, dataType, value, shape) {
 		this.startPos = startPos;
 		this.endPos = endPos;
 		this.symbol = symbol;
 		this.dataType = dataType;
 		this.value = value;
+		this.shape = shape;
 	}
 
 	toString() {
@@ -848,6 +852,7 @@ class Parser {
 	varDeclaration() {
 		const res = new CompileResult();
 		const startPos = this.currentTok.startPos;
+		let shape = null;
 		this.advance();
 
 		const symbol = res.register(this.literal());
@@ -863,7 +868,7 @@ class Parser {
 			);
 		}
 
-		if (this.currentTok.tokenType != TT.COL) {
+		if (this.currentTok.tokenType !== TT.COL) {
 			return res.fail(
 				this.failCurrentTok("Expected ':' after identifier.")
 			);
@@ -871,7 +876,7 @@ class Parser {
 		this.advance();
 
 		if (
-			this.currentTok.tokenType != TT.KEYWORD ||
+			this.currentTok.tokenType !== TT.KEYWORD ||
 			!DATA_TYPES.includes(this.currentTok.value)
 		) {
 			return res.fail(
@@ -883,6 +888,44 @@ class Parser {
 
 		const dataType = this.currentTok.value;
 		this.advance();
+
+		if (this.currentTok.tokenType === TT.LSQ) {
+			shape = [];
+			this.advance();
+			while (
+				this.currentTok.equals(new Token(null, null, TT.NEWLINE, "\n"))
+			)
+				this.advance();
+
+			let shapeLength = res.register(this.literal());
+			if (res.error) return res;
+			shape.push(shapeLength.value);
+
+			while (this.currentTok.tokenType === TT.COMMA) {
+				this.advance();
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
+
+				shapeLength = res.register(this.literal());
+				if (res.error) return res;
+				shape.push(shapeLength.value);
+				while (
+					this.currentTok.equals(
+						new Token(null, null, TT.NEWLINE, "\n")
+					)
+				)
+					this.advance();
+			}
+
+			if (this.currentTok.tokenType !== TT.RSQ) {
+				return res.fail(this.failCurrentTok("Expected ',' or ']'."));
+			}
+			this.advance();
+		}
 
 		let value = null;
 		if (this.currentTok.tokenType == TT.ASSIGN) {
@@ -905,7 +948,8 @@ class Parser {
 				value == null ? dataType.endPos : value.endPos,
 				symbol,
 				dataType,
-				value
+				value,
+				shape
 			)
 		);
 	}
@@ -1525,10 +1569,11 @@ class Environment {
 		]);
 		this.definedVars = [];
 		this.constants = ["true", "false", "N_BITS"];
+		this.arrays = new Map();
 		this.assignAddress = 16;
 	}
 
-	defineSymbol(symbol, varType, dataType, value = null) {
+	defineSymbol(symbol, varType, dataType, value = null, arrayData = null) {
 		const res = new CompileResult();
 
 		if (this.symbols.has(symbol.symbol)) {
@@ -1541,9 +1586,8 @@ class Environment {
 			);
 		}
 
-		if (varType == "const") {
-			this.constants.push(symbol.symbol);
-		}
+		if (varType === "const") this.constants.push(symbol.symbol);
+		else if (varType === "array") this.arrays.set(symbol.symbol, arrayData);
 
 		this.symbols.set(symbol.symbol, [
 			value != null ? value : this.assignAddress,
@@ -2443,13 +2487,46 @@ class Compiler {
 		const res = new CompileResult();
 		const startPos = this.instructions.length;
 		let address = env.assignAddress;
-
 		const value = node.value
 			? res.register(this.visit(node.value, env))
 			: [null, node.dataType];
 		if (res.error) return res;
 
-		if (value[1] != node.dataType) {
+		if (node.shape !== null) {
+			if (node.value !== null && !(node.value instanceof ArrayLiteral)) {
+				return res.fail(
+					new CustomTypeError(
+						node.value.startPos,
+						node.value.endPos,
+						"Cannot assign an expression to an array."
+					)
+				);
+			}
+
+			if (
+				node.value !== null &&
+				!arrayEquals(node.shape, node.value.getShape())
+			) {
+				return res.fail(
+					new CustomTypeError(
+						node.value.startPos,
+						node.value.endPos,
+						`Cannot assign an array with shape ${JSON.stringify(
+							node.value.getShape()
+						)} to shape ${JSON.stringify(node.shape)}.`
+					)
+				);
+			}
+		}
+
+		let dataType = value[1];
+		let isArray = false;
+		if (dataType.startsWith("array<")) {
+			isArray = true;
+			dataType = dataType.replaceAll("array<", "").replaceAll(">", "");
+		}
+
+		if (dataType != node.dataType) {
 			return res.fail(
 				new CustomTypeError(
 					node.startPos,
@@ -2459,7 +2536,29 @@ class Compiler {
 			);
 		}
 
-		res.register(env.defineSymbol(node.symbol, "var", node.dataType));
+		if (isArray) {
+			this.visitNumericLiteral(
+				new NumericLiteral(
+					null,
+					null,
+					new Token(null, null, TT.NUM, address)
+				)
+			);
+			this.comment(
+				`${node.symbol.symbol}${"[0]".repeat(node.shape.length)}`
+			);
+		}
+
+		address = env.assignAddress;
+		res.register(
+			env.defineSymbol(
+				node.symbol,
+				isArray ? "array" : "var",
+				node.dataType,
+				null,
+				isArray ? node.shape : null
+			)
+		);
 		if (res.error) return res;
 
 		if (node.value != null) {
@@ -2669,7 +2768,64 @@ class Compiler {
 		res.register(node.validateArray());
 		if (res.error) return res;
 
-		return res.success([null, null]);
+		const arrayAddress = env.assignAddress;
+		let arrayType;
+		if (node.elements.length === 0) arrayType = "any";
+		else {
+			const getElementType = (elem) => {
+				const localRes = new CompileResult();
+				if (elem instanceof ArrayLiteral) {
+					const nestedRes = localRes.register(
+						this.visitArrayLiteral(elem, env)
+					);
+					if (localRes.error) return localRes;
+
+					return localRes.success(nestedRes[1]);
+				} else {
+					const startPos = this.instructions.length;
+					const elemRes = localRes.register(this.visit(elem, env));
+					if (localRes.error) return localRes;
+
+					if (this.KNOWN_VALUES.includes(elemRes[0]))
+						this.instructions = this.instructions.slice(
+							0,
+							startPos
+						);
+					this.loadImmediate(env.assignAddress);
+					this.write(
+						this.KNOWN_VALUES.includes(elemRes[0])
+							? `COMP ${elemRes[0]} M`
+							: "COMP D M"
+					);
+					env.assignAddress++;
+
+					return localRes.success(elemRes[1]);
+				}
+			};
+
+			const firstElementType = res.register(
+				getElementType(node.elements[0])
+			);
+			if (res.error) return res;
+			arrayType = firstElementType;
+
+			for (let i = 1; i < node.elements.length; i++) {
+				const elemType = res.register(getElementType(node.elements[i]));
+				if (res.error) return res;
+				if (elemType !== arrayType) {
+					return res.fail(
+						new CustomTypeError(
+							node.elements[i].startPos,
+							node.elements[i].endPos,
+							`Array element must have type [${arrayType}], found type [${elemType}] instead.`
+						)
+					);
+				}
+			}
+
+			arrayType = `array<${arrayType}>`;
+		}
+		return res.success([null, arrayType, arrayAddress]);
 	}
 }
 
